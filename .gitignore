@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+*.tsbuildinfo
+
+# media/car.mp4 is a large binary sample asset (~50MB) — requirements §10
+# flags it for LFS or exclusion; tracked for now since it's a POC fallback
+# fixture, but keep an eye on repo size if this grows.

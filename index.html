@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vision Impairment Simulator — POC</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <h1>Vision Impairment Simulator <span class="tag">POC</span></h1>
+        <div class="topbar-status">
+          <span id="fps" class="fps">-- fps</span>
+          <span id="source-status" class="source-status">initializing…</span>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="stage">
+          <div id="stage-wrap" class="stage-wrap">
+            <canvas id="gl-canvas"></canvas>
+            <div id="split-handle" class="split-handle" hidden>
+              <div class="split-handle-grip"></div>
+            </div>
+            <div class="stage-label stage-label-before" id="label-before" hidden>Before</div>
+            <div class="stage-label stage-label-after" id="label-after" hidden>After</div>
+          </div>
+          <p class="disclaimer">
+            POC approximation — diopter→blur mapping is a visual-plausibility
+            design choice, not clinically calibrated. Presbyopia / fog have no
+            scene depth, so blur is uniform rather than distance-aware.
+          </p>
+        </section>
+
+        <aside class="panel" id="panel"></aside>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
