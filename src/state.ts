@@ -41,6 +41,16 @@ export interface AppState {
   viewMode: ViewMode;
   splitPos: number; // 0-1, before/after slider or split divider position
   source: SourceKind;
+
+  // Depth-aware rendering — only changes two things: presbyopia's near-focus
+  // blur and cataract fog (variant "fog"). Everything else is unaffected
+  // regardless of this toggle. Runs an in-browser monocular depth model;
+  // falls back to the flat/uniform approximation automatically if disabled
+  // or the model isn't ready yet.
+  depthEnabled: boolean;
+  // Swaps the canvas to show the raw depth map instead of the processed
+  // frame, for inspecting what the model is actually seeing.
+  depthPreview: boolean;
 }
 
 export function defaultState(): AppState {
@@ -61,6 +71,9 @@ export function defaultState(): AppState {
     viewMode: "normal",
     splitPos: 0.5,
     source: "webcam",
+
+    depthEnabled: true,
+    depthPreview: false,
   };
 }
 

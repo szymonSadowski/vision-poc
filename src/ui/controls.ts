@@ -264,6 +264,50 @@ export function buildControls(
   );
   panel.appendChild(refSection);
 
+  // --- depth-aware rendering ------------------------------------------------
+  const depthSection = section("Depth-Aware Rendering");
+  const depthRow = el("div", "cataract-header");
+  const depthCheckbox = el("input") as HTMLInputElement;
+  depthCheckbox.type = "checkbox";
+  depthCheckbox.checked = store.state.depthEnabled;
+  depthCheckbox.addEventListener("change", () => {
+    store.update((s) => (s.depthEnabled = depthCheckbox.checked));
+  });
+  depthRow.append(depthCheckbox, el("label", "cataract-label", "Use estimated depth"));
+  depthSection.appendChild(depthRow);
+  depthSection.appendChild(
+    el(
+      "p",
+      "hint",
+      "Makes myopia, hyperopia, presbyopia blur, cataract fog, and low-light " +
+        "darkening scale with distance instead of being flat. Astigmatism, " +
+        "cataract blur, glare, halos, and yellowing are unaffected — those " +
+        "aren't depth-dependent phenomena. Needs a scene with both near and " +
+        "far content to be visible, and falls back to flat behavior " +
+        "automatically if disabled or not yet loaded.",
+    ),
+  );
+
+  const previewRow = el("div", "cataract-header");
+  const previewCheckbox = el("input") as HTMLInputElement;
+  previewCheckbox.type = "checkbox";
+  previewCheckbox.checked = store.state.depthPreview;
+  previewCheckbox.addEventListener("change", () => {
+    store.update((s) => (s.depthPreview = previewCheckbox.checked));
+  });
+  previewRow.append(previewCheckbox, el("label", "cataract-label", "Depth-map preview"));
+  depthSection.appendChild(previewRow);
+  depthSection.appendChild(
+    el(
+      "p",
+      "hint",
+      "Shows the raw estimated depth map instead of the processed video — " +
+        "brighter is nearer to the camera. Useful for checking the model " +
+        "loaded and is reading the scene correctly.",
+    ),
+  );
+  panel.appendChild(depthSection);
+
   // --- cataract ------------------------------------------------------------
   const catSection = section("Cataract Symptoms");
 

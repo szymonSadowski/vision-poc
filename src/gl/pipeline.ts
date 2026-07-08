@@ -1,10 +1,13 @@
 import type { AppState } from "../state";
+import { DepthEstimator } from "../depth/depth-estimator";
 import {
+  createDepthTexture,
   createFullscreenQuad,
   createProgram,
   createRenderTarget,
   createVideoTexture,
   resizeRenderTarget,
+  uploadDepthData,
   type RenderTarget,
 } from "./gl-utils";
 import {
@@ -43,6 +46,9 @@ export class Pipeline {
 
   private videoTexture: WebGLTexture;
   private rawTexture: WebGLTexture; // separate copy so before/after has a stable "untouched" frame
+  private depthTexture: WebGLTexture;
+  private depthEstimator: DepthEstimator;
+  private pendingDepth: { data: Uint8Array; width: number; height: number } | null = null;
 
   private rtRefract!: RenderTarget;
   private rtBright!: RenderTarget;
@@ -73,8 +79,25 @@ export class Pipeline {
 
     this.videoTexture = createVideoTexture(gl);
     this.rawTexture = createVideoTexture(gl);
+    this.depthTexture = createDepthTexture(gl);
+
+    // Depth inference runs on its own async loop, fully decoupled from this
+    // render loop's rAF cadence (requirements §7 perf budget is already
+    // tight with 5 shader passes) — this pipeline just samples whatever
+    // depth frame is latest-available each render() call. Started/stopped
+    // from render() based on state.depthEnabled.
+    this.depthEstimator = new DepthEstimator();
+    this.depthEstimator.onDepth((data, width, height) => {
+      this.pendingDepth = { data, width, height };
+    });
 
     this.resize(640, 480);
+  }
+
+  /** For UI status display — depth-aware effects fall back to flat
+   * approximations (today's behavior) until this is true. */
+  depthStatus(): { available: boolean; failed: boolean } {
+    return { available: this.depthEstimator.available, failed: this.depthEstimator.failed };
   }
 
   resize(width: number, height: number) {
@@ -136,15 +159,33 @@ export class Pipeline {
     const gl = this.gl;
     this.uploadFrame(source);
 
+    // ---- depth: feed the decoupled inference loop, pull latest result ----
+    this.depthEstimator.setSource(source);
+    if (state.depthEnabled) this.depthEstimator.start();
+    else this.depthEstimator.stop();
+
+    if (this.pendingDepth) {
+      const { data, width, height } = this.pendingDepth;
+      uploadDepthData(gl, this.depthTexture, data, width, height);
+      this.pendingDepth = null;
+    }
+    const depthAvailable = state.depthEnabled && this.depthEstimator.available ? 1 : 0;
+
     const heightScale = this.height / REFERENCE_HEIGHT;
 
     // ---- derive refraction blur uniforms -------------------------------
     const cataractBlurAmt = state.cataractBlur.enabled ? state.cataractBlur.intensity : 0;
-    const isoPx =
-      (state.myopia / 10) * K_MYOPIA_PX +
-      (state.hyperopia / 7) * K_HYPEROPIA_PX +
-      state.presbyopia * K_PRESBYOPIA_PX +
-      cataractBlurAmt * K_CATARACT_BLUR_PX;
+    // Myopia/hyperopia/presbyopia are excluded from the flat isotropic sum —
+    // each is applied per-pixel in-shader via depth instead (myopia scales
+    // with farness — light focuses in front of the retina, so distant
+    // objects blur more; hyperopia/presbyopia scale with nearness — near
+    // objects blur more), falling back to a flat full-frame contribution
+    // when depth isn't available. Cataract blur and astigmatism stay flat:
+    // lens clouding and irregular corneal focusing aren't depth-dependent.
+    const isoPx = cataractBlurAmt * K_CATARACT_BLUR_PX;
+    const myopiaPx = (state.myopia / 10) * K_MYOPIA_PX * heightScale;
+    const hyperopiaPx = (state.hyperopia / 7) * K_HYPEROPIA_PX * heightScale;
+    const presbyopiaPx = state.presbyopia * K_PRESBYOPIA_PX * heightScale;
 
     const astigT = state.astigmatism / 6;
     const radiusX = (isoPx + astigT * K_ASTIG_MAJOR_PX) * heightScale;
@@ -154,7 +195,14 @@ export class Pipeline {
     gl.useProgram(this.progRefraction);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.videoTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.depthTexture);
     gl.uniform1i(gl.getUniformLocation(this.progRefraction, "uSource"), 0);
+    gl.uniform1i(gl.getUniformLocation(this.progRefraction, "uDepth"), 1);
+    gl.uniform1f(gl.getUniformLocation(this.progRefraction, "uDepthAvailable"), depthAvailable);
+    gl.uniform1f(gl.getUniformLocation(this.progRefraction, "uMyopiaPx"), myopiaPx);
+    gl.uniform1f(gl.getUniformLocation(this.progRefraction, "uHyperopiaPx"), hyperopiaPx);
+    gl.uniform1f(gl.getUniformLocation(this.progRefraction, "uPresbyopiaPx"), presbyopiaPx);
     gl.uniform2f(
       gl.getUniformLocation(this.progRefraction, "uTexelSize"),
       1 / this.width,
@@ -212,12 +260,17 @@ export class Pipeline {
     gl.bindTexture(gl.TEXTURE_2D, this.rtNarrow.texture);
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.rtWide.texture);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, this.depthTexture);
 
     const p = this.progComposite;
     gl.uniform1i(gl.getUniformLocation(p, "uBase"), 0);
     gl.uniform1i(gl.getUniformLocation(p, "uRaw"), 1);
     gl.uniform1i(gl.getUniformLocation(p, "uBloomNarrow"), 2);
     gl.uniform1i(gl.getUniformLocation(p, "uBloomWide"), 3);
+    gl.uniform1i(gl.getUniformLocation(p, "uDepth"), 4);
+    gl.uniform1f(gl.getUniformLocation(p, "uDepthAvailable"), depthAvailable);
+    gl.uniform1f(gl.getUniformLocation(p, "uDepthPreview"), state.depthPreview ? 1 : 0);
 
     gl.uniform1f(gl.getUniformLocation(p, "uGlareIntensity"), glareIntensity * 0.9);
     gl.uniform3f(gl.getUniformLocation(p, "uGlareTint"), ...glareTint);

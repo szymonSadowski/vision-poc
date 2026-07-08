@@ -8,4 +8,12 @@ export default defineConfig({
   server: {
     host: true,
   },
+  // onnxruntime-web's default export condition bundles its wasm binary
+  // (13-26MB) straight into the build via a static asset reference, even
+  // though we set env.wasm.wasmPaths to fetch it from a CDN at runtime.
+  // This custom condition (its own documented escape hatch) picks the
+  // "extern-wasm" build instead, which has no bundled binary at all.
+  resolve: {
+    conditions: ["onnxruntime-web-use-extern-wasm"],
+  },
 });

@@ -30,6 +30,8 @@ src/main.ts              wires everything together, owns the render loop
 src/state.ts              AppState shape + Store (pub/sub state container)
 src/ui/controls.ts        builds the entire control panel from AppState
 src/input/media-source.ts webcam/car.mp4/dims.jpg source switching
+src/depth/depth-estimator.ts in-browser monocular depth model (MiDaS-small),
+                          decoupled from the render loop
 src/gl/pipeline.ts        the multi-pass WebGL2 render pipeline
 src/gl/shaders.ts         all GLSL source, as template strings
 src/gl/gl-utils.ts        low-level WebGL helpers (compile/link/texture/FBO)
@@ -197,11 +199,73 @@ separate rows. Individual sliders/checkboxes otherwise update their own DOM
 node directly on input rather than going through a full rebuild (e.g.
 `cataractRow`'s slider updates `valueEl.textContent` inline).
 
+## Depth-aware rendering (`src/depth/depth-estimator.ts`)
+
+Myopia, hyperopia, and presbyopia blur, plus cataract fog and low-light
+darkening, can optionally use a real per-pixel depth estimate instead of a
+flat, scene-independent value (`state.depthEnabled`, default on) — the
+subset of effects where "distance from camera" is physically meaningful;
+see the per-effect breakdown below. `DepthEstimator` runs MiDaS v2.1 small
+(ONNX, vendored at
+`media/models/midas_v21_small_256.onnx` and served same-origin — see the
+model URL comment in that file for why it's committed rather than fetched
+from Hugging Face's CDN at runtime: that CDN gets blocked by ad-blockers/
+tracking-protection/corporate networks in practice, which surfaced as a
+silent "depth: unavailable" with no obvious cause) via `onnxruntime-web`'s
+WASM backend, on its own async loop
+fully decoupled from the WebGL render loop's rAF cadence: `Pipeline` just
+hands it the current frame source each `render()` call, and picks up
+whatever depth frame is latest-available (a `pendingDepth` field, uploaded
+to a single-channel `R8` texture — `createDepthTexture`/`uploadDepthData` in
+`gl-utils.ts`) rather than blocking on inference. This keeps the ≥30fps
+target for the main pipeline isolated from inference latency.
+
+Critically, `ort.env.wasm.proxy = true` is set in `depth-estimator.ts` —
+without it, `session.run()` executes synchronously inside the awaited call
+(~200-300ms per inference for this model), which blocks the *main* thread
+— and therefore rAF — for its full duration regardless of the scheduling
+loop above; `await` only yields when the underlying work is actually async.
+`proxy: true` moves the WASM runtime into a Worker so that main-thread
+block never happens.
+
+`FRAG_REFRACTION_BLUR` samples the depth texture to scale three blur
+contributions per-pixel instead of adding them into the old flat isotropic
+sum: myopia by *farness* (light focuses in front of the retina, so distant
+objects blur more, near stays relatively clear), hyperopia and presbyopia
+by *nearness* (difficulty with near vision/focus, so near objects blur
+more). `nearness`/`farness` are computed independently (not as each
+other's complement) so each has its own correct fallback value when depth
+isn't available. `FRAG_COMPOSITE` samples farness to scale both fog's and
+the low-light variant's mix factor (distant pixels get more fog/darkening,
+atmospheric-perspective style) — reusing the same farness value already
+passed into `applyContrastAndFog` for fog. Astigmatism (irregular corneal
+focus, not a distance phenomenon), cataract blur/glare/halos/yellowing
+(lens clouding/scattering, roughly uniform across depth) deliberately stay
+flat — not every effect has a physically meaningful depth relationship.
+All of the above take a `uDepthAvailable` uniform and default to today's
+flat, uniform behavior whenever it's `0` — before the first successful
+inference, if the model fails to load (no WASM support, network failure),
+or when the user disables the toggle — so depth is strictly additive,
+never a hard dependency.
+
+`state.depthPreview` bypasses all of that and shows the raw depth texture
+directly (`FRAG_COMPOSITE`'s first branch, brighter = nearer) instead of
+the processed frame — a debugging/demo aid for confirming the model loaded
+and is reading the scene correctly, independent of the toggle above.
+
+Depth here is MiDaS's relative, single-frame inverse-depth output,
+min-max normalized per frame — not metric, not temporally smoothed, and
+squashed to a square 256×256 input regardless of the source frame's aspect
+ratio. It's a perceptual approximation on top of an already-approximate POC
+render, not scene-accurate depth.
+
 ## Known constraints (see `requirements.md` for full detail)
 
 - Diopter→blur-radius mapping is a hand-tuned visual approximation, not a
   clinical model.
-- Presbyopia and fog have no scene depth, so blur/veil is uniform across the
-  frame rather than distance-aware.
+- Presbyopia and fog can use estimated depth (see above) to vary with
+  distance, but it's a relative, single-frame, monocular estimate — not
+  ground-truth scene depth — so both remain approximations, not
+  clinically- or scene-accurate.
 - Requires WebGL2 — `main.ts` shows a fallback error message if unavailable
   (Safari/mobile have limited support, a known risk per requirements §7).

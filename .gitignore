@@ -6,3 +6,7 @@ dist/
 # media/car.mp4 is a large binary sample asset (~50MB) — requirements §10
 # flags it for LFS or exclusion; tracked for now since it's a POC fallback
 # fixture, but keep an eye on repo size if this grows.
+#
+# media/models/midas_v21_small_256.onnx (~66MB) is the depth-estimation
+# model — vendored (not CDN-fetched) after hitting real ad-blocker/network
+# CORS failures against Hugging Face's CDN. Same tracked-for-now tradeoff.

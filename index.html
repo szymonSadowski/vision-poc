@@ -13,6 +13,7 @@
         <div class="topbar-status">
           <span id="fps" class="fps">-- fps</span>
           <span id="source-status" class="source-status">initializing…</span>
+          <span id="depth-status" class="source-status">depth: off</span>
         </div>
       </header>
 
@@ -28,8 +29,11 @@
           </div>
           <p class="disclaimer">
             POC approximation — diopter→blur mapping is a visual-plausibility
-            design choice, not clinically calibrated. Presbyopia / fog have no
-            scene depth, so blur is uniform rather than distance-aware.
+            design choice, not clinically calibrated. Presbyopia blur and fog
+            can use an in-browser monocular depth estimate (toggle in the
+            panel) to vary with distance, but it's relative, single-frame
+            depth from a small model — not ground truth — so treat it as an
+            approximation, not scene-accurate.
           </p>
         </section>
 

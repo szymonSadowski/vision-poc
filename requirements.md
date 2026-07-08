@@ -41,9 +41,9 @@ Build a POC that renders real-time, perceptually realistic simulations of common
 | Presbyopia | No diopter table in source briefing | Simulated via a near-focus/reading-distance parameter (not diopter-driven); real-time visual update |
 
 **Rendering guidance:**
-- Myopia/hyperopia: symmetric blur, radius scaling with diopter magnitude. Hyperopia should read as lighter/less severe blur than an equivalent-magnitude myopia value (near-task strain, not heavy defocus) — treat as an approximation since true accommodation-dependent blur needs depth data unavailable from a 2D feed.
+- Myopia/hyperopia: symmetric blur, radius scaling with diopter magnitude. Hyperopia should read as lighter/less severe blur than an equivalent-magnitude myopia value (near-task strain, not heavy defocus). Both can optionally scale per-pixel by an estimated depth map (§10) — myopia blurs farther objects more (light focuses in front of the retina), hyperopia blurs nearer objects more — but it's relative monocular depth, not a clinical accommodation model, so treat as an approximation either way.
 - Astigmatism: directional/elliptical blur (independent major/minor axis radii plus an axis-angle control), not a symmetric blur — see severity mapping below for the target look at each diopter band.
-- Presbyopia: blur radius driven by a user-set simulated reading-distance/near-focus parameter rather than scene depth; explicitly an approximation, not scene-aware.
+- Presbyopia: blur radius driven by a user-set simulated reading-distance/near-focus parameter, optionally scaled per-pixel by an estimated depth map (§10) so nearer objects blur more; still an approximation, not clinically scene-aware.
 
 ### Astigmatism severity → visual effect reference (from briefing backup)
 
@@ -128,7 +128,7 @@ From the briefing's real-world scenario list, mapped to which symptoms they best
 
 ## 10. Assumptions & Open Risks
 
-- **No depth sensing:** presbyopia's near-focus blur and any depth-aware fog effect cannot use true scene depth from a single 2D webcam feed; both are parameter-driven approximations, not scene-aware. This should be communicated as a POC limitation, not hidden.
+- **No true depth sensing, but an estimated approximation is available:** there's no depth sensor, so presbyopia's near-focus blur and cataract fog can't use ground-truth scene depth. An optional in-browser monocular depth model (MiDaS-small, toggleable, on by default) now provides a relative, per-frame depth estimate they can key off instead of a flat value — see `architecture.md`'s "Depth-aware rendering" section. This is still an approximation (relative/monocular/non-metric, not temporally smoothed, squashed to a square input), not clinically accurate scene depth, and both effects fall back to the original flat behavior automatically if the toggle is off or the model hasn't loaded. Communicate this as a POC approximation, not hidden — the in-app disclaimer (`index.html`) already reflects this.
 - **No clinical calibration:** the mapping from diopter value to blur radius/pixel parameters is a POC design choice for visual plausibility, not a clinically validated model — avoid over-claiming literal clinical accuracy despite the briefing's "clinically accurate" language; aim for perceptual plausibility.
 - **Severity model:** recommend a single internal continuous intensity value (0–1) per effect, with mild/moderate/severe exposed in the UI as presets mapped to fixed intensity values (e.g. 0.33 / 0.66 / 1.0). This decision should be fixed early since both diopter sliders and severity presets need to drive the same underlying shader uniforms.
 - **Performance risk:** stacking multiple multi-pass effects (directional blur + bloom/glare + LUT color grading) simultaneously may not sustain target frame rate on low-end or mobile devices; a reduced-resolution or reduced-pass mode may be needed as a fallback, out of scope for initial POC unless time allows.

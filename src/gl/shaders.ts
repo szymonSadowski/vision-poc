@@ -25,16 +25,37 @@ out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform vec2 uTexelSize;   // 1/width, 1/height in source pixels
-uniform float uRadiusX;    // major axis radius, in source pixels
-uniform float uRadiusY;    // minor axis radius, in source pixels
+uniform float uRadiusX;    // major axis radius, in source pixels (excludes myopia/hyperopia/presbyopia)
+uniform float uRadiusY;    // minor axis radius, in source pixels (excludes myopia/hyperopia/presbyopia)
 uniform float uAngle;      // axis angle, radians
+uniform sampler2D uDepth;       // per-pixel nearness, 0=far..1=near
+uniform float uDepthAvailable;  // 0 or 1 — no depth model loaded/ready yet
+uniform float uMyopiaPx;        // myopia's isotropic blur contribution
+uniform float uHyperopiaPx;     // hyperopia's isotropic blur contribution
+uniform float uPresbyopiaPx;    // presbyopia's isotropic blur contribution
 
 // 16-tap poisson-ish ring + center, cheap approximation of a gaussian
 // disk — good enough for perceptual blur at real-time frame budgets.
 const int TAP_COUNT = 16;
 
 void main() {
-  if (uRadiusX < 0.05 && uRadiusY < 0.05) {
+  // Myopia blurs distant objects more (light focuses in front of the
+  // retina); hyperopia/presbyopia blur near objects more (difficulty with
+  // near focus). Each needs its own fallback to today's flat behavior when
+  // depth isn't available, so nearness and farness are computed
+  // independently rather than as each other's complement — deriving one
+  // from "1.0 minus the other's fallback" would zero out the wrong effect
+  // when uDepthAvailable is 0.
+  float depthSample = texture(uDepth, vUv).r;
+  float nearness = mix(1.0, depthSample, uDepthAvailable);
+  float farness = mix(1.0, 1.0 - depthSample, uDepthAvailable);
+  float myopiaContribution = uMyopiaPx * farness;
+  float hyperopiaContribution = uHyperopiaPx * nearness;
+  float presbyopiaContribution = uPresbyopiaPx * nearness;
+  float radiusX = uRadiusX + myopiaContribution + hyperopiaContribution + presbyopiaContribution;
+  float radiusY = uRadiusY + myopiaContribution + hyperopiaContribution + presbyopiaContribution;
+
+  if (radiusX < 0.05 && radiusY < 0.05) {
     fragColor = texture(uSource, vUv);
     return;
   }
@@ -50,8 +71,8 @@ void main() {
     float ring = float(i % 4 == 0 ? 1 : 0); // vary radius a little per ring
     float rScale = 0.55 + 0.45 * ring;
     float theta = t * 6.28318530718 * 3.0; // spiral through several turns
-    float rx = uRadiusX * rScale * sqrt(t + 0.05);
-    float ry = uRadiusY * rScale * sqrt(t + 0.05);
+    float rx = radiusX * rScale * sqrt(t + 0.05);
+    float ry = radiusY * rScale * sqrt(t + 0.05);
 
     // offset in the blur's local (major/minor) frame
     vec2 local = vec2(cos(theta) * rx, sin(theta) * ry);
@@ -136,6 +157,9 @@ uniform sampler2D uBase;       // refraction-blurred frame
 uniform sampler2D uRaw;        // untouched source frame (for before/after)
 uniform sampler2D uBloomNarrow;
 uniform sampler2D uBloomWide;
+uniform sampler2D uDepth;       // per-pixel nearness, 0=far..1=near
+uniform float uDepthAvailable;  // 0 or 1 — no depth model loaded/ready yet
+uniform float uDepthPreview;    // 0 or 1 — show the raw depth map instead
 
 uniform float uGlareIntensity;
 uniform vec3 uGlareTint;
@@ -151,12 +175,17 @@ uniform float uYellowIntensity;
 uniform int uViewMode;   // 0 normal, 1 before/after, 2 split
 uniform float uSplitPos; // 0-1
 
-vec3 applyContrastAndFog(vec3 color) {
+vec3 applyContrastAndFog(vec3 color, float farness) {
   // Low-light variant: darken & desaturate first (rods-only look at night).
+  // With depth available this scales with distance too — same atmospheric
+  // idea as fog below (nearby things stay relatively visible in the dark,
+  // distance fades to black) — falling back to a flat effect otherwise.
   if (uLowLightAmount > 0.0) {
+    float lowLightFarness = mix(1.0, farness, uDepthAvailable);
+    float amt = uLowLightAmount * lowLightFarness;
     float g = dot(color, vec3(0.299, 0.587, 0.114));
-    color = mix(color, vec3(g) * 0.85, uLowLightAmount);
-    color *= mix(1.0, 0.75, uLowLightAmount);
+    color = mix(color, vec3(g) * 0.85, amt);
+    color *= mix(1.0, 0.75, amt);
   }
   // Contrast compression: pull toward mid-gray and lift blacks instead of
   // simply darkening, per requirements §6.
@@ -164,9 +193,13 @@ vec3 applyContrastAndFog(vec3 color) {
     vec3 lifted = color * 0.72 + 0.14;
     color = mix(color, lifted, uContrastIntensity);
   }
-  // Fog variant: additive whitish veil, scene-brightness independent.
+  // Fog variant: additive whitish veil. With depth available it thickens
+  // with distance (atmospheric perspective); without it, farness's mix
+  // factor is forced to 1.0 so every pixel gets the same flat veil as
+  // before (today's scene-brightness-independent behavior).
   if (uFogAmount > 0.0) {
-    color = mix(color, vec3(0.85, 0.86, 0.88), uFogAmount * 0.5);
+    float fogFarness = mix(1.0, farness, uDepthAvailable);
+    color = mix(color, vec3(0.85, 0.86, 0.88), uFogAmount * 0.5 * fogFarness);
   }
   return color;
 }
@@ -177,6 +210,11 @@ vec3 applyYellowing(vec3 color) {
 }
 
 void main() {
+  if (uDepthPreview > 0.5) {
+    fragColor = vec4(vec3(texture(uDepth, vUv).r), 1.0);
+    return;
+  }
+
   vec3 base = texture(uBase, vUv).rgb;
 
   vec3 bloomWide = texture(uBloomWide, vUv).rgb;
@@ -189,7 +227,8 @@ void main() {
   color += bloomWide * uGlareIntensity * uGlareTint;
   color += halo * uHaloIntensity * uHaloTint * 2.0;
 
-  color = applyContrastAndFog(color);
+  float farness = 1.0 - texture(uDepth, vUv).r;
+  color = applyContrastAndFog(color, farness);
   color = applyYellowing(color);
   color = clamp(color, 0.0, 1.0);
 
@@ -207,10 +246,12 @@ void main() {
       finalColor = texture(uRaw, uv2).rgb;
     } else {
       vec2 uv2 = vec2((vUv.x - 0.5) * 2.0, vUv.y);
+      float farness2 = 1.0 - texture(uDepth, uv2).r;
       finalColor = applyYellowing(applyContrastAndFog(
         texture(uBase, uv2).rgb
         + texture(uBloomWide, uv2).rgb * uGlareIntensity * uGlareTint
-        + max(texture(uBloomWide, uv2).rgb - texture(uBloomNarrow, uv2).rgb, 0.0) * uHaloIntensity * uHaloTint * 2.0
+        + max(texture(uBloomWide, uv2).rgb - texture(uBloomNarrow, uv2).rgb, 0.0) * uHaloIntensity * uHaloTint * 2.0,
+        farness2
       ));
       finalColor = clamp(finalColor, 0.0, 1.0);
     }

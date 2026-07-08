@@ -8,6 +8,7 @@ const canvas = document.getElementById("gl-canvas") as HTMLCanvasElement;
 const panel = document.getElementById("panel") as HTMLElement;
 const fpsEl = document.getElementById("fps") as HTMLElement;
 const statusEl = document.getElementById("source-status") as HTMLElement;
+const depthStatusEl = document.getElementById("depth-status") as HTMLElement;
 const stageWrap = document.getElementById("stage-wrap") as HTMLElement;
 const splitHandle = document.getElementById("split-handle") as HTMLElement;
 const labelBefore = document.getElementById("label-before") as HTMLElement;
@@ -92,6 +93,16 @@ function frame(now: number) {
     fpsEl.textContent = `${fps.toFixed(0)} fps`;
     frameCount = 0;
     lastFpsUpdate = now;
+
+    if (!store.state.depthEnabled) depthStatusEl.textContent = "depth: off";
+    else {
+      const { available, failed } = pipeline.depthStatus();
+      depthStatusEl.textContent = failed
+        ? "depth: unavailable"
+        : available
+          ? "depth: on"
+          : "depth: loading…";
+    }
   }
 }
 
